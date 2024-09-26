@@ -1518,6 +1518,8 @@ class LMEvalMistralForCausalLM_KIVI(HFLM):
                     "Failed to place model onto specified device. This may be because the model is quantized via `bitsandbytes`. If the desired GPU is being used, this message is safe to ignore."
                 )
 
+        print("pretrained", pretrained)
+        print("use_fast_tokenizer", use_fast_tokenizer)
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(
             pretrained if tokenizer is None else tokenizer,
             revision=revision,
