@@ -138,9 +138,14 @@ if __name__ == '__main__':
         )
         print(evaluator.make_table(results))
         samples = results["samples"]
-        filepath = f"./output_samples/{training_args.exp_name}.json"
+
+        output_dir = "./output_samples/"
+        os.makedirs(output_dir, exist_ok=True)
+
+        filepath = f"{output_dir}/{training_args.exp_name}.json"
         with open(filepath, "w") as f:
             json.dump(samples, f)
+            
         # if data_args.output_path is not None:
         #     os.makedirs(os.path.dirname(data_args.output_path), exist_ok=True)
         #     # otherwise cannot save

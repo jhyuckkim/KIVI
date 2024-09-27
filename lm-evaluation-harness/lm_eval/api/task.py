@@ -821,7 +821,7 @@ class ConfigurableTask(Task):
     def apply_filters(self):
         if hasattr(self, "_filters"):
             for f in self._filters:
-                f.apply(self._instances, self.task_docs)
+                f.apply(self._instances)
         else:
             eval_logger.warning("No filter defined, passing through instances")
             return self._instances
