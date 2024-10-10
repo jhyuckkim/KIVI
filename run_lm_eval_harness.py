@@ -1,154 +1,78 @@
-import os
-os.environ["WANDB_DISABLED"] = "true"
-os.environ["HUGGING_FACE_HUB_TOKEN"] = "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"
-import argparse
-import json, tqdm
 import torch
-import copy
+from transformers import AutoTokenizer, AutoConfig
+import lm_eval
+import os
+import json
 
-import math
-import time
-from lm_eval import evaluator, utils
-from lm_eval.tasks import initialize_tasks, include_path
-from lm_eval.api.registry import ALL_TASKS
+from models.mistral_kivi import MistralForCausalLM_KIVI
 
-from utils.process_args import process_args
-from transformers import LlamaConfig, AutoTokenizer, FalconConfig, MistralConfig
-from utils.data import set_seed
-from datasets import load_dataset
+# Define model arguments (adjust these based on your requirements)
+k_bits = 4  # Example value (could be 2, 4, or 16)
+v_bits = 4  # Example value (could be 2, 4, or 16)
+group_size = 64  # Define if needed
+residual_length = 128  # Define if needed
+dtype = torch.float16
+low_cpu_mem_usage = True
 
-from accelerate import Accelerator
-accelerator = Accelerator()
+MODEL_PATH = '/data/models/mistralai--Mistral-7B-Instruct-v0.3'
+SAVE_PATH = '/lm_eval_results'
+RESULTS_FILE_NAME = "Mistral-7B-Instruct-v0.3.json"
 
-if __name__ == '__main__':
+tokenizer = AutoTokenizer.from_pretrained(
+    MODEL_PATH,
+    use_fast=False,
+    trust_remote_code=True,
+)
 
-    set_seed(42)
+config = AutoConfig.from_pretrained(
+    MODEL_PATH,
+    trust_remote_code=True,
+)
+config.k_bits = k_bits
+config.v_bits = v_bits
+config.group_size = group_size
+config.residual_length = residual_length
+config.attention_dropout = 0.0
 
-    model_args, data_args, training_args = process_args()
-    dtype = torch.float16
-    if 'llama' in model_args.model_name_or_path.lower():
-        config = LlamaConfig.from_pretrained(model_args.model_name_or_path)
-        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, 
-                                            use_fast=False, 
-                                            trust_remote_code=True, 
-                                            tokenizer_type='llama',
-                                            model_max_length=training_args.model_max_length)
-    elif 'mistral' in model_args.model_name_or_path.lower():
-        config = MistralConfig.from_pretrained(model_args.model_name_or_path)
-        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, 
-                                            use_fast=False, 
-                                            trust_remote_code=True, 
-                                            tokenizer_type='mistral',
-                                            model_max_length=training_args.model_max_length)
-    else:
-        raise NotImplementedError
+model = MistralForCausalLM_KIVI.from_pretrained(
+    MODEL_PATH,
+    config=config,
+    cache_dir=MODEL_PATH,
+    torch_dtype=dtype,
+    low_cpu_mem_usage=low_cpu_mem_usage,
+)
 
-    if torch.cuda.device_count() > 1:
-        parallel = True
-        low_cpu_mem_usage=True
-    else:
-        parallel = False
-        low_cpu_mem_usage=True
-    if 'llama' in model_args.model_name_or_path.lower():
-        if model_args.k_bits == 16 and model_args.v_bits == 16:
-            from models.modeling_llama import LMEvalLlamaForCausalLM
-            model = LMEvalLlamaForCausalLM(
-                k_bits=model_args.k_bits,
-                v_bits=model_args.v_bits,
-                group_size=model_args.group_size,
-                residual_length=model_args.residual_length,
-                pretrained=model_args.model_name_or_path,
-                cache_dir=training_args.cache_dir,
-                dtype=dtype,
-                low_cpu_mem_usage=low_cpu_mem_usage,
-            )
-        else:
-            assert model_args.k_bits in [2, 4] and model_args.v_bits in [2, 4]
-            from models.llama_kivi import LMEvalLlamaForCausalLM_KIVI
+model.eval().to('cuda')
+# model.tie_weights()
 
-            model = LMEvalLlamaForCausalLM_KIVI(
-                k_bits=model_args.k_bits,
-                v_bits=model_args.v_bits,
-                group_size=model_args.group_size,
-                residual_length=model_args.residual_length,
-                pretrained=model_args.model_name_or_path,
-                cache_dir=training_args.cache_dir,
-                dtype=dtype,
-                low_cpu_mem_usage=low_cpu_mem_usage,
-            )
-    elif 'mistral' in model_args.model_name_or_path.lower():
-        print("Mistral is called")
-        if model_args.k_bits == 16 and model_args.v_bits == 16:
-            from models.modeling_mistral import LMEvalMistralForCausalLM
-            model = LMEvalMistralForCausalLM(
-                k_bits=model_args.k_bits,
-                v_bits=model_args.v_bits,
-                group_size=model_args.group_size,
-                residual_length=model_args.residual_length,
-                pretrained=model_args.model_name_or_path,
-                cache_dir=training_args.cache_dir,
-                dtype=dtype,
-                low_cpu_mem_usage=low_cpu_mem_usage,
-            )
-        else:
-            assert model_args.k_bits in [2, 4] and model_args.v_bits in [2, 4]
-            from models.mistral_kivi import LMEvalMistralForCausalLM_KIVI
+# Corrected variable name from 'custom_model' to 'model'
+lm_obj = lm_eval.models.huggingface.HFLM(
+    pretrained=model,  # Pass your custom model instance
+    tokenizer=tokenizer,
+    device="cuda",
+)
 
-            model = LMEvalMistralForCausalLM_KIVI(
-                k_bits=model_args.k_bits,
-                v_bits=model_args.v_bits,
-                group_size=model_args.group_size,
-                residual_length=model_args.residual_length,
-                pretrained=model_args.model_name_or_path,
-                cache_dir=training_args.cache_dir,
-                dtype=dtype,
-                low_cpu_mem_usage=low_cpu_mem_usage,
-                use_fast_tokenizer=False,
-            )
-    else:
-        raise NotImplementedError
-    # model = model.eval().cuda()
+task_manager = lm_eval.tasks.TaskManager()
+tasks = ["gsm8k"]
 
-    if data_args.tasks is not None:
-        initialize_tasks()
-        tasks_list = data_args.tasks.split(",")
-        task_names = utils.pattern_match(tasks_list, ALL_TASKS)
-        for task in [task for task in tasks_list if task not in task_names]:
-            if os.path.isfile(task):
-                config = utils.load_yaml_config(task)
-                task_names.append(config)
-        task_missing = [
-            task
-            for task in tasks_list
-            if task not in task_names and "*" not in task
-        ]  # we don't want errors if a wildcard ("*") task name was used
+task_dict = lm_eval.tasks.get_task_dict(
+    tasks,
+    task_manager
+)
 
-        if task_missing:
-            missing = ", ".join(task_missing)
-            raise ValueError(
-                f"Tasks {missing} were not found. Try `lm-eval --tasks list` for list of available tasks."
-            )
-        results = evaluator.simple_evaluate(
-            model=model,
-            # model_args='parallelize=True',
-            tasks=task_names,
-            log_samples=True
-            # no_cache=True,
-            # num_fewshot=data_args.num_fewshot,
-        )
-        print(evaluator.make_table(results))
-        samples = results["samples"]
+print("task_dict", task_dict)
 
-        output_dir = "./output_samples/"
-        os.makedirs(output_dir, exist_ok=True)
+results = lm_eval.evaluate(
+    lm=lm_obj,
+    task_dict=task_dict,
+)
 
-        filepath = f"{output_dir}/{training_args.exp_name}.json"
-        with open(filepath, "w") as f:
-            json.dump(samples, f)
-            
-        # if data_args.output_path is not None:
-        #     os.makedirs(os.path.dirname(data_args.output_path), exist_ok=True)
-        #     # otherwise cannot save
-        #     results["config"]["model"] = model_args.model_name_or_path
-        #     with open(data_args.output_path, "w") as f:
-        #         json.dump(results, f, indent=2)
+print(results["results"])
+
+# Save results if the path is specified
+if SAVE_PATH:
+    os.makedirs(SAVE_PATH, exist_ok=True)
+    results_file = os.path.join(SAVE_PATH, results_file_name)
+    with open(results_file, 'w') as f:
+        json.dump(results, f)
+    print(f"Results saved to {results_file}")
